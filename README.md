@@ -1,4 +1,4 @@
-# Customer Satisfaction Dashboard for Grandview Energy
+# Customer Satisfaction Dashboard for Grandview Energy (Dummy company)
 
 ## Overview
 This dashboard is designed to help **Grandview Energy** understand customer sentiment and address concerns based on a comprehensive survey with over 30 questions. The survey covers key metrics such as **Net Promoter Score (NPS)**, **Customer Satisfaction (CSAT)**, and detailed feedback on various aspects of the company's services.
@@ -33,16 +33,16 @@ The dashboard is built using **Power BI** and includes the following features:
 Here are some highlights from the dashboard:
 
 1. **Highlights**:
-   ![Highlights](media/image1.png)
+   <img width="700" alt="Image" src="https://github.com/user-attachments/assets/653ab062-248f-4de5-9c27-f53cebe8c062" />
 
 2. **Demographics and NPS Insights**:
-   ![Demographics and NPS](media/image2.png)
+   <img width="700" alt="Image" src="https://github.com/user-attachments/assets/5ce84d4e-2e24-4e13-bc56-f7ea05359a4f" />
 
 3. **Question Categories and Insights**:
-   ![Question Categories](media/image3.png)
+   <img width="700" alt="Image" src="https://github.com/user-attachments/assets/a0d77926-d587-42f4-9ae0-cd9518bbfdf6" />
 
 4. **Energy Cost Savings and Customer Suggestions**:
-   ![Energy Cost Savings](media/image4.png)
+   <img width="700" alt="Image" src="https://github.com/user-attachments/assets/72bddcee-a723-4891-9a46-a2c693da0647" />
 
 ---
 
@@ -63,6 +63,147 @@ The dashboard was built using the following tools:
 - **Power BI**: For data visualization and dashboard creation.
 - **Python**: For backend sentiment analysis and keyword extraction.
 
+### A view of the python script for sentiments
+```bash
+import pandas as pd
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from rake_nltk import Rake
+import nltk
+from nltk.corpus import stopwords
+
+# Downloading stopwords (run once)
+nltk.download("stopwords")
+
+# To load dataset from Power BI
+df = dataset
+
+# Initializing sentiment analyzer
+analyzer = SentimentIntensityAnalyzer()
+
+# Custom stopwords: Retain words like "is", "to", "of", etc.
+custom_stopwords = set(stopwords.words("english")) - {"is", "to", "of","great","satisfactory", "your","for", "also", "good", "high"}
+
+# Initializing RAKE
+rake = Rake(
+    min_length=1,
+    max_length=4,
+    stopwords=custom_stopwords
+)
+
+# Define experience related attributes
+experience_attributes = [
+    "Service quality",
+    "Professionalism and responsiveness",
+    "Performance reporting and insights",
+    "Technical performance",
+    "Solar system reliability",
+    "Energy cost reduction",
+    "Maintenance service timeliness and quality",
+    "Fault resolution",
+    "Customer support accessibility",
+    "Billing statement clarity",
+    "Pricing and payment transparency",
+    "Solar solutions' sustainability impact"
+]
+
+# Function to categorize Attribute
+def _categorize_attribute(attribute):
+    if pd.isna(attribute):
+        return "General"
+
+    attribute = str(attribute).lower()
+
+    # Check for experience attributes
+    if attribute.title() in experience_attributes:
+        return "Experience"
+
+    # Special case: Handle "Reason for Recommendations"
+    if attribute.startswith("reason for recommendations"):
+        return "Normal"  # Will be processed as a general comment
+
+    key_value_triggers = ["value most", "key value", "primary reason", "key strength"]
+    importance_triggers = ["how important", "critical", "crucial", "significance"]
+
+    if any(trigger in attribute for trigger in key_value_triggers):
+        return "KeyValue"
+    if any(trigger in attribute for trigger in importance_triggers):
+        return "Importance"
+    if any(word in attribute for word in ["improve", "suggest","what improvement", "wish"]):
+        return "Suggestion"
+
+    return "General"
+
+# Function to analyze sentiment with Attribute context
+def _analyze_sentiment(comment, attribute_type):
+    if pd.isna(comment) or comment.strip().lower() in ["test", "n/a"]:
+        return "Neutral"
+
+    comment_lower = comment.lower()
+    score = analyzer.polarity_scores(comment)["compound"]
+
+    # Handle Experience attributes
+    if attribute_type == "Experience":
+        return "Positive" if score >= 0.1 else ("Negative" if score <= -0.1 else "Neutral")
+
+    # Normal evaluation for "Reason for Recommendations"
+    if attribute_type == "Normal":
+        return "Positive" if score >= 0.1 else ("Negative" if score <= -0.1 else "Neutral")
+
+    # Handle KeyValue context
+    if attribute_type == "KeyValue":
+        if any(word in comment_lower for word in ["good", "excellent", "professionalism"]):
+            return "Positive"
+        return "Positive" if score >= 0 else "Neutral"
+
+    # Handle Importance context
+    if attribute_type == "Importance":
+        if "important" in comment_lower or "critical" in comment_lower:
+            return "Positive"
+        return "Positive" if score >= -0.05 else "Negative"
+
+    # Handle Suggestion context (default to Neutral)
+    if attribute_type == "Suggestion":
+        return "Neutral" if -0.1 <= score <= 0.1 else ("Positive" if score > 0.1 else "Negative")
+
+    # Default sentiment calculation
+    return "Positive" if score >= 0.1 else ("Negative" if score <= -0.1 else "Neutral")
+
+# Function to extract key phrases that match sentiment
+def _extract_best_key_phrase(comment, sentiment):
+    if pd.isna(comment) or comment.strip().lower() in ["test", "n/a"]:
+        return "No key phrases"
+
+    # Extract phrases using RAKE
+    rake.extract_keywords_from_text(comment)
+    phrases = rake.get_ranked_phrases()
+
+    # Ensure phrases match sentiment
+    relevant_phrases = []
+    for phrase in phrases:
+        phrase_score = analyzer.polarity_scores(phrase)["compound"]
+
+        if sentiment == "Positive" and phrase_score > 0.1:
+            relevant_phrases.append(phrase)
+        elif sentiment == "Negative" and phrase_score < -0.1:
+            relevant_phrases.append(phrase)
+
+    # Select the most relevant key phrase
+    best_phrase = relevant_phrases[0] if relevant_phrases else None
+
+    # Fallback: Use first 2-4 meaningful words if RAKE fails
+    if not best_phrase:
+        words = [word for word in comment.split() if word.lower() not in custom_stopwords]
+        best_phrase = " ".join(words[:4]) if words else "No key phrases"
+
+    return best_phrase
+
+# Apply functions to dataset
+df["Sentiment"] = df.apply(lambda row: _analyze_sentiment(row["Comments"], _categorize_attribute(row["Attribute"])), axis=1)
+df["Key Phrases"] = df.apply(lambda row: _extract_best_key_phrase(row["Comments"], row["Sentiment"]), axis=1)
+
+# Output only the required columns
+dataset = df
+```
 ### Dependencies
 To run the Python scripts, the following dependencies are required:
 ```bash
@@ -76,7 +217,6 @@ pip install nltk
 import nltk
 nltk.download("stopwords")
 ```
-
 ### Installation and Setup
 - 1. Clone this repository to your local machine.
 
@@ -92,11 +232,9 @@ nltk.download("stopwords")
 
 - **Filters:**
 
-    - Use the global slicers on the right-hand side to filter data across all pages.
+    - Use the global slicers on the right-hand side to filter data across all pages. <img width="160" alt="Image" src="https://github.com/user-attachments/assets/a34b5f93-e71d-480e-b2ef-8c15e606dc56" />
     
     - Each dashboard has independent filters for more granular analysis.
-    
-    - A global date filter is available on the left-hand side.
 
 ### Planned Updates
 Future updates to the dashboard will include:
